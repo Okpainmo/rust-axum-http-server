@@ -28,7 +28,7 @@ cargo build
 or install latest versions individually
 
 ```shell
-cargo add axum tokio --features tokio/full serde --features serde/derive serde_json
+cargo add axum tokio --features tokio/full serde --features serde/derive serde_json dotenvy sqlx argon2 rand
 ```
 
 3. Start the local database via Docker
