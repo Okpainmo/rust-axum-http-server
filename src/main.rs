@@ -44,54 +44,8 @@ struct Response {
 #[derive(Debug, Serialize)]
 struct RegisterResponse {
     response_message: String,    
-    response: Response,
+    response: Option<Response>,
     error: Option<String>
-}
-
-#[tokio::main]
-async fn main() {
-    load_env();
-
-    
-    // println!("Environment: {}", env);
-    // println!("Server running on port {}", port);
-    // Build router
-    
-    // let port = env::var("PORT").unwrap_or("8000".to_string());
-    let environment = env::var("DEPLOY_ENV").unwrap_or("development".to_string());
-    let user = env::var("POSTGRES_USER").unwrap();
-    let pass = env::var("POSTGRES_PASSWORD").unwrap();
-    let host = env::var("POSTGRES_HOST").unwrap();
-    let db_port = env::var("POSTGRES_PORT").unwrap();
-    let db = env::var("POSTGRES_DB").unwrap();
-
-    let database_url = format!("postgres://{}:{}@{}:{}/{}", user, pass, host, db_port, db);
-
-    let db_pool = connect_pg(database_url).await;
-
-    let app = Router::new()
-        .route("/api/v1/auth/register", post(register_handler))
-        .layer(Extension(db_pool));
-
-    // Server address
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
-
-    println!(
-        "
-        .................................................
-        Connected to DB Host: {}
-        Environment: {}
-        Status: DB connected successfully
-        .................................................
-
-        Server running on http://{}
-        ",
-        host, environment, addr
-    );
-
-    // Start server
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
 }
 
 fn load_env() {
@@ -115,14 +69,7 @@ async fn register_handler(
         Err(e) => {
             return Json(RegisterResponse {
                 response_message: "Failed to hash password".to_string(),
-                response: Response {
-                    user_profile: UserProfile {
-                        user_id: 0i64,
-                        full_name: String::new(),
-                        email: String::new(),
-                        profile_image_url: None,
-                    },
-                },
+                response: None,
                 error: Some(format!("Password hashing error: {}", e)),
             });
         }
@@ -142,43 +89,35 @@ async fn register_handler(
         if count > 0 {
             return Json(RegisterResponse {
                 response_message: "Registration failed".to_string(),
-                response: Response {
-                    user_profile: UserProfile {
-                        user_id: 0i64,
-                        full_name: String::new(),
-                        email: String::new(),
-                        profile_image_url: None,
-                    },
-                },
+                response: None,
                 error: Some("Email already exists".to_string()),
             });
         }
     }
 
-    // Insert user into database
+    // Insert user into database (schema: email, password, full_name, profile_image_url)
     let full_name = format!("{} {}", payload.first_name, payload.last_name);
-    
+
     let result = sqlx::query_as::<_, UserProfile>(
         r#"
-            INSERT INTO users (first_name, last_name, email, password, full_name)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO users (email, password, full_name, profile_image_url)
+            VALUES ($1, $2, $3, $4)
             RETURNING id, full_name, email, profile_image_url
         "#
     )
-    .bind(&payload.first_name)
-    .bind(&payload.last_name)
     .bind(&payload.email)
     .bind(&hashed_password)
     .bind(&full_name)
+    .bind(Option::<String>::None)
     .fetch_one(&db_pool)
     .await;
 
     match result {
         Ok(new_user) => Json(RegisterResponse {
             response_message: format!("User with email '{}' registered successfully!", payload.email),
-            response: Response {
+            response: Some(Response {
                 user_profile: new_user,
-            },
+            }),
             error: None,
         }),
         Err(e) => {
@@ -191,16 +130,56 @@ async fn register_handler(
 
             Json(RegisterResponse {
                 response_message: "Failed to register user".to_string(),
-                response: Response {
-                    user_profile: UserProfile {
-                        user_id: 0i64,
-                        full_name: String::new(),
-                        email: String::new(),
-                        profile_image_url: None,
-                    },
-                },
+                response: None,
                 error: Some(error_msg),
             })
         }
     }
+}
+
+#[tokio::main]
+async fn main() {
+    load_env();
+    println!("DB = {:?}", std::env::var("DATABASE_URL"));
+
+    
+    // println!("Environment: {}", env);
+    // println!("Server running on port {}", port);
+    // Build router
+    
+    // let port = env::var("PORT").unwrap_or("8000".to_string());
+    let environment = env::var("DEPLOY_ENV").unwrap_or("development".to_string());
+    let user = env::var("POSTGRES_USER").unwrap();
+    let pass = env::var("POSTGRES_PASSWORD").unwrap();
+    let host = env::var("POSTGRES_HOST").unwrap();
+    let db_port = env::var("POSTGRES_PORT").unwrap();
+    let db = env::var("POSTGRES_DB").unwrap();
+
+    let database_url = format!("postgres://{}:{}@{}:{}/{}", user, pass, host, db_port, db);
+
+    let db_pool = connect_pg(database_url.clone()).await;
+
+    let app = Router::new()
+        .route("/api/v1/auth/register", post(register_handler))
+        .layer(Extension(db_pool));
+
+    // Server address
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+
+    println!(
+        "
+        .................................................
+        Connected to DB: {}
+        Environment: {}
+        Status: DB connected successfully
+        .................................................
+
+        Server running on http://{}
+        ",
+        database_url, environment, addr
+    );
+
+    // Start server
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
