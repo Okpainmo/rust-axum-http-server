@@ -1,3 +1,0 @@
-[alias]
-dev="watch -q -c -w src/ -x run"
-
