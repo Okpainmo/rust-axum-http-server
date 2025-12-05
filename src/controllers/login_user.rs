@@ -1,0 +1,102 @@
+use axum::{Json, extract::Extension, http::StatusCode, response::IntoResponse};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+
+// utils import
+use crate::utils::verification_handler::verification_handler; // your existing password verification function
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct UserProfile {
+    #[sqlx(rename = "id")]
+    user_id: i64,
+    full_name: String,
+    email: String,
+    profile_image_url: Option<String>,
+    #[serde(skip_serializing)]
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseCore {
+    user_profile: UserProfile,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    email: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginResponse {
+    response_message: String,
+    response: Option<ResponseCore>,
+    error: Option<String>,
+}
+
+// Reuse UserProfile and ResponseCore from register controller
+
+pub async fn login_user(
+    Extension(db_pool): Extension<PgPool>,
+    Json(payload): Json<LoginRequest>,
+) -> impl IntoResponse {
+    // Fetch user by email
+    let user_result = sqlx::query_as::<_, UserProfile>(
+        "SELECT id, full_name, email, profile_image_url, password FROM users WHERE email = $1",
+    )
+    .bind(&payload.email)
+    .fetch_optional(&db_pool)
+    .await;
+
+    let user = match user_result {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(LoginResponse {
+                    response_message: "Login failed".to_string(),
+                    response: None,
+                    error: Some("Invalid email or password".to_string()),
+                }),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(LoginResponse {
+                    response_message: "Login failed".to_string(),
+                    response: None,
+                    error: Some(format!("Database error: {}", e)),
+                }),
+            );
+        }
+    };
+
+    // Verify password using your custom handler
+    match verification_handler(&payload.password, &user.password).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(LoginResponse {
+                response_message: "Login successful".to_string(),
+                response: Some(ResponseCore { user_profile: user }),
+                error: None,
+            }),
+        ),
+        Ok(false) => (
+            StatusCode::UNAUTHORIZED,
+            Json(LoginResponse {
+                response_message: "Login failed".to_string(),
+                response: None,
+                error: Some("Invalid email or password".to_string()),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(LoginResponse {
+                response_message: "Login failed".to_string(),
+                response: None,
+                error: Some(format!("Password verification error: {}", e)),
+            }),
+        ),
+    }
+}
